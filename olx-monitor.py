@@ -4,6 +4,11 @@ import re
 import time
 from datetime import datetime
 import urllib.parse
+import json
+import os
+from telegram import Bot
+from telegram.error import TelegramError
+import asyncio
 
 class OLXiPhoneScraper:
     def __init__(self):
@@ -44,8 +49,15 @@ class OLXiPhoneScraper:
         # Control output verbosity
         self.verbose = False  # Set to True for detailed debug output
         
-        # Track the last matching listings for saving
-        self.last_matched_listings = []
+        # Load configuration for Telegram
+        self.load_config()
+        
+        # Track listings that have been notified to prevent duplicate messages
+        self.notified_listings = set()
+        
+        # Load previously notified listings from file to persist across restarts
+        if self.telegram_enabled:
+            self.load_notified_listings()
 
     def extract_price(self, price_text):
         """Extract numeric price from text"""
@@ -378,6 +390,16 @@ class OLXiPhoneScraper:
                     valid_listings.append(listing_data)
                     print(f"Found valid listing: {phone_model} - {price} zł ✓")
                     
+                    # Send Telegram notification for the new listing
+                    if link not in self.notified_listings:
+                        # Attempt to send notification
+                        try:
+                            self.send_telegram_notification(listing_data)
+                            # Mark this listing as notified
+                            self.notified_listings.add(link)
+                        except Exception as e:
+                            print(f"Failed to send Telegram notification for {phone_model}: {e}")
+                    
                     # Stop if we've found enough listings
                     if len(valid_listings) >= 20:
                         print("Reached maximum number of listings to process.")
@@ -414,52 +436,6 @@ class OLXiPhoneScraper:
             print(traceback.format_exc())
             return []
 
-    def save_to_file(self, listings, filename='listing.txt'):
-        """Save listings to text file"""
-        try:
-            # Ensure we have listings to save
-            if not listings and self.last_matched_listings:
-                print("Using cached listings from previous cycle")
-                listings = self.last_matched_listings
-            
-            # Ensure the listings directory exists
-            import os
-            os.makedirs(os.path.dirname(os.path.abspath(filename)) or '.', exist_ok=True)
-            
-            # Use absolute path for the file
-            abs_filename = os.path.abspath(filename)
-            print(f"Saving to absolute path: {abs_filename}")
-            
-            with open(abs_filename, 'w', encoding='utf-8') as f:
-                f.write(f"iPhone Listings from OLX - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write("=" * 60 + "\n\n")
-                
-                if not listings:
-                    f.write("No listings found matching the criteria.\n")
-                    f.flush()  # Ensure content is written to disk
-                    return
-                
-                for i, listing in enumerate(listings, 1):
-                    f.write(f"LISTING #{i}\n")
-                    f.write("-" * 20 + "\n")
-                    f.write(f"Phone: {listing['phone_name']}\n")
-                    f.write(f"Price: {listing['price']} zł\n")
-                    f.write(f"Description: {listing['description']}\n")
-                    f.write(f"Link: {listing['link']}\n")
-                    f.write("\n" + "=" * 40 + "\n\n")
-                
-                # Explicitly flush to ensure content is written to disk
-                f.flush()
-                print(f"Successfully saved {len(listings)} listings to {abs_filename}")
-                
-                # Store these listings for future reference
-                self.last_matched_listings = listings.copy()  # Make a copy to prevent reference issues
-                
-        except Exception as e:
-            print(f"ERROR in save_to_file: {str(e)}")
-            import traceback
-            print(f"Traceback: {traceback.format_exc()}")
-
     def run(self):
         """Main method to run the scraper"""
         try:
@@ -471,21 +447,117 @@ class OLXiPhoneScraper:
             if listings:
                 # Listings are already filtered during scraping
                 print(f"\nFound {len(listings)} valid listings matching criteria and price limits")
-                self.save_to_file(listings)
             else:
                 print("No valid listings found matching price criteria")
-                # Always save to file, either with empty list or previous matches
-                if not self.last_matched_listings:
-                    print("No previous matches found - saving empty file")
-                    self.save_to_file([])
-                else:
-                    print(f"Using previous {len(self.last_matched_listings)} matches in listing.txt")
-                    self.save_to_file(self.last_matched_listings)
                 
         except Exception as e:
             print(f"ERROR in run method: {str(e)}")
             import traceback
             print(f"Traceback: {traceback.format_exc()}")
+
+    def load_config(self):
+        """Load configuration from config.json"""
+        try:
+            with open('config.json', 'r') as f:
+                config = json.load(f)
+                
+            telegram_config = config.get('telegram', {})
+            self.bot_token = telegram_config.get('bot_token')
+            self.chat_id = telegram_config.get('chat_id')
+            self.telegram_enabled = telegram_config.get('enabled', False) and self.bot_token
+            
+            if self.telegram_enabled:
+                self.bot = Bot(token=self.bot_token)
+                print(f"Telegram notifications enabled for chat ID: {self.chat_id}")
+            else:
+                print("Telegram notifications disabled - check config.json")
+                
+            # Notification settings
+            notification_settings = config.get('notification_settings', {})
+            self.max_message_length = notification_settings.get('max_message_length', 4000)
+            self.include_description = notification_settings.get('include_description', True)
+            
+        except FileNotFoundError:
+            print("config.json not found - Telegram notifications disabled")
+            self.telegram_enabled = False
+        except Exception as e:
+            print(f"Error loading config: {e}")
+            self.telegram_enabled = False
+
+    def load_notified_listings(self):
+        """Load previously notified listings from file"""
+        try:
+            with open('notified_listings.txt', 'r') as f:
+                self.notified_listings = set(line.strip() for line in f if line.strip())
+            print(f"Loaded {len(self.notified_listings)} previously notified listings")
+        except FileNotFoundError:
+            print("No previous notification history found")
+        except Exception as e:
+            print(f"Error loading notification history: {e}")
+
+    def save_notified_listings(self):
+        """Save notified listings to file"""
+        try:
+            with open('notified_listings.txt', 'w') as f:
+                for listing_url in self.notified_listings:
+                    f.write(f"{listing_url}\n")
+        except Exception as e:
+            print(f"Error saving notification history: {e}")
+
+    async def send_telegram_message(self, listing):
+        """Send Telegram message for a new listing"""
+        if not self.telegram_enabled:
+            return False
+            
+        try:
+            # Format the message
+            message = f"🍎 *New iPhone Deal Found!*\n\n"
+            message += f"📱 *Model:* {listing['phone_name']}\n"
+            message += f"💰 *Price:* {listing['price']} zł\n"
+            
+            if self.include_description and listing['description'] and listing['description'] != "No description available":
+                # Truncate description if too long
+                desc = listing['description']
+                if len(desc) > 200:
+                    desc = desc[:200] + "..."
+                message += f"📝 *Description:* {desc}\n"
+            
+            message += f"🔗 [View Listing]({listing['link']})"
+            
+            # Ensure message isn't too long
+            if len(message) > self.max_message_length:
+                message = message[:self.max_message_length-10] + "..."
+            
+            # Send the message
+            await self.bot.send_message(
+                chat_id=self.chat_id,
+                text=message,
+                parse_mode='Markdown',
+                disable_web_page_preview=False
+            )
+            
+            print(f"Telegram message sent successfully for {listing['phone_name']}")
+            return True
+            
+        except TelegramError as e:
+            print(f"Telegram error: {e}")
+            return False
+        except Exception as e:
+            print(f"Error sending Telegram message: {e}")
+            return False
+
+    def send_telegram_notification(self, listing):
+        """Wrapper to run async Telegram sending"""
+        try:
+            # Run the async function
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            result = loop.run_until_complete(self.send_telegram_message(listing))
+            loop.close()
+            return result
+        except Exception as e:
+            print(f"Error in Telegram notification wrapper: {e}")
+            return False
 
 if __name__ == "__main__":
     try:

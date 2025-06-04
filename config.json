@@ -1,0 +1,11 @@
+{
+    "telegram": {
+        "bot_token": "8170868923:AAFMB4Q7i8FKu8HvyD35hLfNPBn082_r5J0",
+        "chat_id": "7844832999",
+        "enabled": true
+    },
+    "notification_settings": {
+        "max_message_length": 4000,
+        "include_description": true
+    }
+}
