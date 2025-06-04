@@ -250,11 +250,16 @@ class OLXiPhoneScraper:
             
             print(f"Found {len(listings)} potential listings")
             
+            # Limit to only the first 10 listings (newest since sorted by created_at:desc)
+            max_listings_to_check = 10
+            listings_to_process = listings[:max_listings_to_check]
+            print(f"Processing only the newest {len(listings_to_process)} listings")
+            
             valid_listings = []
             skipped_count = 0
             skipped_models = {}  # Track skipped models and their count
             
-            for i, listing in enumerate(listings):  # Check all listings
+            for i, listing in enumerate(listings_to_process):  # Check only the newest listings
                 try:
                     # Extract title
                     title_elem = listing.find('h6') or listing.find('h4') or listing.find('a', {'data-cy': 'listing-ad-title'})
