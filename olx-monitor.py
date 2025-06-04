@@ -306,15 +306,68 @@ class OLXiPhoneScraper:
                             print(f"WARNING: No price limit for {phone_model}")
                         continue
                     
-                    # Extract description (if available)
-                    desc_elem = listing.find('p', class_=re.compile(r'description')) or \
-                               listing.find('div', class_=re.compile(r'description'))
-                    description = desc_elem.get_text(strip=True) if desc_elem else "No description available"
+                    # Skip extracting description from listing preview - it's often just the price
+                    # Always fetch the full listing page for proper description
+                    description = "No description available"
+                    
+                    try:
+                        print(f"Fetching full page for detailed description: {link}")
+                        detail_page = requests.get(link, headers=self.headers, timeout=10)
+                        if detail_page.status_code == 200:
+                            detail_soup = BeautifulSoup(detail_page.content, 'html.parser')
+                            
+                            # Try different selectors for OLX descriptions
+                            # Main OLX description container
+                            detail_desc = detail_soup.find('div', {'data-cy': 'ad_description'})
+                            
+                            # Fallback to other common selectors for description
+                            if not detail_desc or not detail_desc.text.strip():
+                                detail_desc = detail_soup.find('div', class_=re.compile(r'css-.*description')) or \
+                                            detail_soup.find('div', class_='descriptioncontent') or \
+                                            detail_soup.find('div', id='textContent')
+                                
+                            # Parse out any specific description content
+                            if detail_desc:
+                                # Remove all style and script tags to avoid CSS content
+                                for script in detail_desc.find_all(['script', 'style']):
+                                    script.decompose()
+                                
+                                # Get clean text content without CSS
+                                description_text = detail_desc.get_text(separator=' ', strip=True)
+                                
+                                # Filter out CSS-like content and other unwanted text
+                                # Remove CSS rules (anything containing { } or starting with .)
+                                description_text = re.sub(r'\.[a-zA-Z0-9_-]+\{[^}]*\}', '', description_text)
+                                description_text = re.sub(r'\.css-[a-zA-Z0-9_-]+\{[^}]*\}', '', description_text)
+                                description_text = re.sub(r'\{[^}]*\}', '', description_text)
+                                
+                                # Remove common CSS properties and values
+                                description_text = re.sub(r'(font-size|line-height|margin|padding|color|text-transform|font-family):[^;]*;?', '', description_text)
+                                
+                                # Remove standalone CSS class names
+                                description_text = re.sub(r'\.css-[a-zA-Z0-9_-]+', '', description_text)
+                                
+                                # Clean up common prefixes and formatting issues
+                                description_text = re.sub(r'^(Opis:?\s*|Description:?\s*|O przedmiocie:?\s*)', '', description_text)
+                                description_text = re.sub(r'\s+', ' ', description_text)  # Normalize whitespace
+                                description_text = description_text.strip()
+                                
+                                # Skip if description is just the price again or contains CSS
+                                if (len(description_text) > 15 and 
+                                    not re.match(r'^[\d\s,.]+\s?zł$', description_text) and
+                                    not re.search(r'\.css-|font-size|line-height|\{|\}', description_text)):
+                                    description = description_text
+                                    print(f"Found detailed description ({len(description)} chars): {description[:50]}...")
+                                else:
+                                    print(f"Found description but it appears to be CSS/price: '{description_text[:100]}...'")
+                            
+                    except Exception as detail_err:
+                        print(f"Error fetching detailed description: {str(detail_err)}")
                     
                     listing_data = {
                         'phone_name': phone_model,
                         'price': price,
-                        'description': description[:200] + '...' if len(description) > 200 else description,
+                        'description': description[:300] + '...' if len(description) > 300 else description,
                         'link': link,
                         'title': title
                     }
@@ -368,13 +421,22 @@ class OLXiPhoneScraper:
             if not listings and self.last_matched_listings:
                 print("Using cached listings from previous cycle")
                 listings = self.last_matched_listings
-                
-            with open(filename, 'w', encoding='utf-8') as f:
+            
+            # Ensure the listings directory exists
+            import os
+            os.makedirs(os.path.dirname(os.path.abspath(filename)) or '.', exist_ok=True)
+            
+            # Use absolute path for the file
+            abs_filename = os.path.abspath(filename)
+            print(f"Saving to absolute path: {abs_filename}")
+            
+            with open(abs_filename, 'w', encoding='utf-8') as f:
                 f.write(f"iPhone Listings from OLX - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write("=" * 60 + "\n\n")
                 
                 if not listings:
                     f.write("No listings found matching the criteria.\n")
+                    f.flush()  # Ensure content is written to disk
                     return
                 
                 for i, listing in enumerate(listings, 1):
@@ -386,10 +448,12 @@ class OLXiPhoneScraper:
                     f.write(f"Link: {listing['link']}\n")
                     f.write("\n" + "=" * 40 + "\n\n")
                 
-                print(f"Successfully saved {len(listings)} listings to {filename}")
+                # Explicitly flush to ensure content is written to disk
+                f.flush()
+                print(f"Successfully saved {len(listings)} listings to {abs_filename}")
                 
                 # Store these listings for future reference
-                self.last_matched_listings = listings
+                self.last_matched_listings = listings.copy()  # Make a copy to prevent reference issues
                 
         except Exception as e:
             print(f"ERROR in save_to_file: {str(e)}")
