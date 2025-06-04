@@ -286,12 +286,6 @@ class OLXiPhoneScraper:
                     if link.startswith('/'):
                         link = 'https://www.olx.pl' + link
                     
-                    # Check if this listing has been seen before
-                    if link in self.seen_listings:
-                        if self.verbose:
-                            print(f"Skipping already processed listing: {title}")
-                        continue
-                    
                     # Identify phone model
                     phone_model = self.identify_phone_model(title)
                     if not phone_model:
@@ -394,11 +388,16 @@ class OLXiPhoneScraper:
                     if link not in self.notified_listings:
                         # Attempt to send notification
                         try:
+                            print(f"📱 Sending Telegram notification for NEW listing: {phone_model}")
                             self.send_telegram_notification(listing_data)
                             # Mark this listing as notified
                             self.notified_listings.add(link)
+                            # Save updated notification list
+                            self.save_notified_listings()
                         except Exception as e:
                             print(f"Failed to send Telegram notification for {phone_model}: {e}")
+                    else:
+                        print(f"⏭️  Skipping notification for {phone_model} - already notified before")
                     
                     # Stop if we've found enough listings
                     if len(valid_listings) >= 20:
