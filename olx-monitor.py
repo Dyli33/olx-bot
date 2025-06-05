@@ -16,13 +16,13 @@ class OLXiPhoneScraper:
         
         # Price thresholds in PLN
         self.price_limits = {
-            "iPhone 11": 400,
-            "iPhone 11 Pro": 500,
-            "iPhone 11 Pro Max": 600,
-            "iPhone 12": 550,
-            "iPhone 12 Pro": 850,
-            "iPhone 12 Pro Max": 950,
-            "iPhone 13": 950,
+            "iPhone 11": 520,
+            "iPhone 11 Pro": 520,
+            "iPhone 11 Pro Max": 620,
+            "iPhone 12": 570,
+            "iPhone 12 Pro": 870,
+            "iPhone 12 Pro Max": 970,
+            "iPhone 13": 970,
             "iPhone 13 Pro": 1350,
             "iPhone 13 Pro Max": 1450,
             "iPhone 14": 1250,
@@ -250,16 +250,11 @@ class OLXiPhoneScraper:
             
             print(f"Found {len(listings)} potential listings")
             
-            # Limit to only the first 10 listings (newest since sorted by created_at:desc)
-            max_listings_to_check = 10
-            listings_to_process = listings[:max_listings_to_check]
-            print(f"Processing only the newest {len(listings_to_process)} listings")
-            
             valid_listings = []
             skipped_count = 0
             skipped_models = {}  # Track skipped models and their count
             
-            for i, listing in enumerate(listings_to_process):  # Check only the newest listings
+            for i, listing in enumerate(listings):
                 try:
                     # Extract title
                     title_elem = listing.find('h6') or listing.find('h4') or listing.find('a', {'data-cy': 'listing-ad-title'})
