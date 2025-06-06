@@ -10,6 +10,7 @@ import os
 from telegram import Bot
 from telegram.error import TelegramError
 import asyncio
+import random  # Add this import for random wait times
 
 class OLXiPhoneScraper:
     def __init__(self):
@@ -68,6 +69,13 @@ class OLXiPhoneScraper:
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
         }
+        
+        # Add a list of user agents for rotation
+        self.user_agents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
+        ]
         
         # Track seen listings by URL to avoid duplicates
         self.seen_listings = set()
@@ -377,6 +385,9 @@ class OLXiPhoneScraper:
                         print("Reached maximum listings limit (20)")
                         break
                     
+                    # Add a small random delay between processing each listing
+                    time.sleep(random.uniform(1, 3))  # Wait 1-3 seconds
+                    
                 except Exception as e:
                     if self.verbose:
                         print(f"Error processing listing {i+1}: {e}")
@@ -544,11 +555,12 @@ if __name__ == "__main__":
                 
                 scraper.run()
                 
-                print(f"\nCycle #{cycle} completed. Waiting 20 seconds...")
+                wait_time = random.uniform(5, 15)  # Random wait between 5-15 seconds
+                print(f"\nCycle #{cycle} completed. Waiting {wait_time:.1f} seconds...")
                 print("=" * 50)
-                
+
                 cycle += 1
-                time.sleep(20)  # Wait 20 seconds between checks
+                time.sleep(wait_time)  # Wait for the random interval
                 
             except requests.exceptions.RequestException as e:
                 print(f"\n🌐 Network error in cycle #{cycle}: {e}")
