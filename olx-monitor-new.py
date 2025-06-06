@@ -92,6 +92,13 @@ class OLXiPhoneScraper:
         # Load previously notified listings from file to persist across restarts
         if hasattr(self, 'telegram_enabled') and self.telegram_enabled:
             self.load_notified_listings()
+        
+        # Proxy management attributes
+        self.proxies = []  # List of available proxies
+        self.current_proxy = None  # Currently used proxy
+        self.proxy_fails = 0  # Counter for consecutive proxy failures
+        self.max_proxy_fails = 5  # Max allowed failures before rotating proxy
+        self.use_proxy = True  # Enable or disable proxy usage
 
     def build_search_url(self):
         """Build the search URL dynamically based on filters"""
@@ -510,6 +517,260 @@ class OLXiPhoneScraper:
         except Exception as e:
             print(f"Error in Telegram notification wrapper: {e}")
             return False
+
+    def refresh_proxies(self):
+        """Fetch new list of Polish proxies"""
+        print("🔄 Refreshing proxy list...")
+        self.proxies = self.get_polish_proxies()
+        if self.proxies:
+            self.current_proxy = random.choice(self.proxies)
+            print(f"✅ Found {len(self.proxies)} Polish proxies")
+            if self.verbose:
+                print(f"Currently using: {self.current_proxy}")
+        else:
+            print("❌ No Polish proxies found. Will continue without proxy.")
+            self.use_proxy = False
+
+    def get_polish_proxies(self):
+        """Get a list of free Polish proxies"""
+        proxies = []
+        proxy_sources = [
+            self._get_proxies_from_free_proxy_list,
+            self._get_proxies_from_geonode,
+            self._get_proxies_from_proxyscrape
+        ]
+
+        for source_func in proxy_sources:
+            try:
+                source_proxies = source_func()
+                if source_proxies:
+                    proxies.extend(source_proxies)
+                    if len(proxies) >= 5:  # If we have enough proxies, stop
+                        break
+            except Exception as e:
+                if self.verbose:
+                    print(f"Error getting proxies from source: {e}")
+
+        # Verify the proxies work with OLX
+        verified_proxies = self._verify_proxies(proxies)
+        return verified_proxies
+
+    def _get_proxies_from_free_proxy_list(self):
+        """Get Polish proxies from free-proxy-list.net"""
+        proxies = []
+        try:
+            headers = {
+                'User-Agent': random.choice(self.user_agents)
+            }
+            response = requests.get('https://free-proxy-list.net/', headers=headers, timeout=10)
+            soup = BeautifulSoup(response.text, 'html.parser')
+
+            table = soup.find('table', {'id': 'proxylisttable'})
+            if not table:
+                return []
+
+            for row in table.tbody.find_all('tr'):
+                cells = row.find_all('td')
+                if len(cells) >= 8 and cells[2].text.strip() == 'PL':  # Country code for Poland
+                    ip = cells[0].text.strip()
+                    port = cells[1].text.strip()
+                    https = cells[6].text.strip()
+
+                    if https == 'yes':  # HTTPS proxy
+                        proxy_url = f'https://{ip}:{port}'
+                    else:
+                        proxy_url = f'http://{ip}:{port}'
+
+                    proxies.append(proxy_url)
+
+            if self.verbose:
+                print(f"Found {len(proxies)} proxies from free-proxy-list.net")
+        except Exception as e:
+            if self.verbose:
+                print(f"Error getting proxies from free-proxy-list.net: {e}")
+
+        return proxies
+
+    def _get_proxies_from_geonode(self):
+        """Get Polish proxies from geonode.com API"""
+        proxies = []
+        try:
+            url = 'https://proxylist.geonode.com/api/proxy-list?limit=50&page=1&country=PL&speed=fast'
+            headers = {
+                'User-Agent': random.choice(self.user_agents)
+            }
+            response = requests.get(url, headers=headers, timeout=10)
+            data = response.json()
+
+            if 'data' in data:
+                for proxy in data['data']:
+                    ip = proxy.get('ip')
+                    port = proxy.get('port')
+                    protocol = proxy.get('protocols', ['http'])[0]  # Default to http
+
+                    if ip and port:
+                        proxy_url = f'{protocol}://{ip}:{port}'
+                        proxies.append(proxy_url)
+
+            if self.verbose:
+                print(f"Found {len(proxies)} proxies from geonode.com")
+        except Exception as e:
+            if self.verbose:
+                print(f"Error getting proxies from geonode.com: {e}")
+
+        return proxies
+
+    def _get_proxies_from_proxyscrape(self):
+        """Get Polish proxies from proxyscrape.com"""
+        proxies = []
+        try:
+            url = 'https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=PL&ssl=all&anonymity=all'
+            headers = {
+                'User-Agent': random.choice(self.user_agents)
+            }
+            response = requests.get(url, headers=headers, timeout=10)
+
+            if response.status_code == 200:
+                for line in response.text.split('\r\n'):
+                    if line.strip():
+                        proxy_url = f'http://{line.strip()}'
+                        proxies.append(proxy_url)
+
+            if self.verbose:
+                print(f"Found {len(proxies)} proxies from proxyscrape.com")
+        except Exception as e:
+            if self.verbose:
+                print(f"Error getting proxies from proxyscrape.com: {e}")
+
+        return proxies
+
+    def _verify_proxies(self, proxy_list):
+        """Test proxies against OLX to verify they work"""
+        verified_proxies = []
+        test_url = 'https://www.olx.pl/'
+
+        print(f"Verifying {len(proxy_list)} proxies...")
+
+        for proxy in proxy_list:
+            try:
+                # Prepare proxy format for requests
+                proxy_dict = {
+                    'http': proxy,
+                    'https': proxy
+                }
+
+                # Rotate user agent
+                test_headers = self.headers.copy()
+                test_headers['User-Agent'] = random.choice(self.user_agents)
+
+                # Test with a short timeout
+                response = requests.get(
+                    test_url, 
+                    headers=test_headers, 
+                    proxies=proxy_dict,
+                    timeout=5
+                )
+
+                if response.status_code == 200 and 'olx.pl' in response.text:
+                    verified_proxies.append(proxy)
+                    if self.verbose:
+                        print(f"✅ Verified working proxy: {proxy}")
+
+                    # If we have enough verified proxies, stop
+                    if len(verified_proxies) >= 3:
+                        break
+            except:
+                # Skip this proxy if it fails
+                pass
+
+        if verified_proxies:
+            print(f"✅ Verified {len(verified_proxies)} working Polish proxies")
+        else:
+            print("❌ No working proxies found")
+
+        return verified_proxies
+
+    def rotate_proxy(self):
+        """Select a different proxy from the pool"""
+        if not self.proxies or not self.use_proxy:
+            return None
+
+        self.current_proxy = random.choice(self.proxies)
+        self.proxy_fails = 0  # Reset fail counter for new proxy
+
+        if self.verbose:
+            print(f"🔄 Rotated to new proxy: {self.current_proxy}")
+
+        return self.current_proxy
+
+    def get_proxy_dict(self):
+        """Get the current proxy in dict format for requests"""
+        if not self.use_proxy or not self.current_proxy:
+            return None
+
+        return {
+            'http': self.current_proxy,
+            'https': self.current_proxy
+        }
+
+    def make_request(self, url, timeout=15):
+        """Make a request with proxy support and fallback"""
+        headers = self.headers.copy()
+        headers['User-Agent'] = random.choice(self.user_agents)
+
+        if not self.use_proxy:
+            return requests.get(url, headers=headers, timeout=timeout)
+
+        # Try with proxy
+        try:
+            proxy_dict = self.get_proxy_dict()
+            if self.verbose:
+                print(f"Making request with proxy: {self.current_proxy}")
+
+            response = requests.get(
+                url, 
+                headers=headers,
+                proxies=proxy_dict,
+                timeout=timeout
+            )
+
+            # Check if we're getting a valid response
+            if response.status_code == 200:
+                return response
+
+            # If we get a bad response, increment fail counter
+            self.proxy_fails += 1
+
+        except Exception as e:
+            if self.verbose:
+                print(f"Proxy request failed: {e}")
+            self.proxy_fails += 1
+
+        # If proxy failed too many times, rotate or disable
+        if self.proxy_fails >= self.max_proxy_fails:
+            if len(self.proxies) > 1:
+                # Try another proxy
+                self.rotate_proxy()
+            else:
+                # If we're out of proxies, try to get new ones or continue without
+                new_proxies = self.get_polish_proxies()
+                if new_proxies:
+                    self.proxies = new_proxies
+                    self.current_proxy = random.choice(self.proxies)
+                    self.proxy_fails = 0
+                else:
+                    print("⚠️ All proxies failed and couldn't find new ones. Continuing without proxy.")
+                    self.use_proxy = False
+
+        # Fallback without proxy if needed
+        if not self.use_proxy or self.proxy_fails >= self.max_proxy_fails:
+            if self.verbose:
+                print("Falling back to direct connection")
+            return requests.get(url, headers=headers, timeout=timeout)
+
+        # If we're here, we need to try another attempt with a different proxy
+        proxy_dict = self.get_proxy_dict()
+        return requests.get(url, headers=headers, proxies=proxy_dict, timeout=timeout)
 
     def run(self):
         """Main method to run the scraper"""
