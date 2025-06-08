@@ -20,7 +20,7 @@ class OLXiPhoneScraper:
             'query': 'iphone',
             'distance': 30,  # km radius
             'order': 'created_at:desc',  # newest first
-            'condition': 'used',  # used items only
+            'condition': ['used', 'damaged'],  # used and damaged items
             'phone_models': [
                 'iphone-11',
                 'iphone-11-pro', 
@@ -119,9 +119,19 @@ class OLXiPhoneScraper:
         if self.search_filters.get('order'):
             params['search[order]'] = self.search_filters['order']
         
-        # Condition filter (used/new)
+        # Condition filter (used/new/damaged)
         if self.search_filters.get('condition'):
-            params['search[filter_enum_state][0]'] = self.search_filters['condition']
+            condition = self.search_filters['condition']
+            if isinstance(condition, list):
+                # Handle multiple conditions
+                for i, cond in enumerate(condition):
+                    if cond == 'damaged':
+                        params[f'search[filter_enum_state][{i}]'] = 'broken'  # OLX uses 'broken' for damaged items
+                    else:
+                        params[f'search[filter_enum_state][{i}]'] = cond
+            else:
+                # Handle single condition
+                params['search[filter_enum_state][0]'] = condition
         
         # Phone model filters
         if self.search_filters.get('phone_models'):
