@@ -392,8 +392,7 @@ class OLXiPhoneScraper:
                         print("Reached maximum listings limit (20)")
                         break
                     
-                    # Add a small random delay between processing each listing
-                    time.sleep(random.uniform(1, 3))  # Wait 1-3 seconds
+            
                     
                 except Exception as e:
                     if self.verbose:
@@ -816,7 +815,7 @@ if __name__ == "__main__":
                 
                 scraper.run()
                 
-                wait_time = random.uniform(5, 15)  # Random wait between 5-15 seconds
+                wait_time = random.uniform(3, 5)  # Random wait between 3-5 seconds
                 print(f"\nCycle #{cycle} completed. Waiting {wait_time:.1f} seconds...")
                 print("=" * 50)
 
