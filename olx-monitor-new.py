@@ -20,7 +20,7 @@ class OLXiPhoneScraper:
             'query': 'iphone',
             'distance': 30,  # km radius
             'order': 'created_at:desc',  # newest first
-            'condition': ['used', 'damaged', 'new'],  # used, new and damaged items
+            'condition': ['used', 'damaged', 'new'],  # used new and damaged items
             'phone_models': [
                 'iphone-11',
                 'iphone-11-pro', 
@@ -119,33 +119,21 @@ class OLXiPhoneScraper:
         if self.search_filters.get('order'):
             params['search[order]'] = self.search_filters['order']
         
-        # Condition filter (used/new/damaged)
+        # Condition filter (used/new)
         if self.search_filters.get('condition'):
-            conditions = self.search_filters['condition']
-            if isinstance(conditions, list):
-                for i, condition in enumerate(conditions):
-                    params[f'search[filter_enum_state][{i}]'] = condition
-                if self.verbose:
-                    print(f"🔍 Applied condition filters: {', '.join(conditions)}")
-            else:
-                params['search[filter_enum_state][0]'] = conditions
-                if self.verbose:
-                    print(f"🔍 Applied condition filter: {conditions}")
+            params['search[filter_enum_state][0]'] = self.search_filters['condition']
         
         # Phone model filters
         if self.search_filters.get('phone_models'):
             for i, model in enumerate(self.search_filters['phone_models']):
                 params[f'search[filter_enum_phonemodel][{i}]'] = model
-            if self.verbose:
-                print(f"🔍 Applied {len(self.search_filters['phone_models'])} phone model filters")
         
         # Build the final URL with parameters
         if params:
             url += '?' + urllib.parse.urlencode(params, doseq=True)
         
         if self.verbose:
-            print(f"🌐 Built search URL: {url}")
-            print(f"📊 URL parameters: {len(params)} filters applied")
+            print(f"Built search URL: {url}")
         
         return url
 
@@ -262,21 +250,16 @@ class OLXiPhoneScraper:
 
     def scrape_listings(self):
         """Scrape iPhone listings from OLX using dynamic URL"""
-        print("🚀 Starting to scrape iPhone listings from OLX...")
-        print(f"⏰ Timestamp: {datetime.now().strftime('%H:%M:%S')}")
+        print("Starting to scrape iPhone listings from OLX...")
         
         # Build the search URL dynamically
         search_url = self.build_search_url()
         
         try:
-            print("🌐 Making HTTP request to OLX...")
             response = requests.get(search_url, headers=self.headers, timeout=15)
             response.raise_for_status()
-            print(f"✅ HTTP request successful (Status: {response.status_code})")
-            print(f"📄 Response size: {len(response.content)} bytes")
             
             soup = BeautifulSoup(response.content, 'html.parser')
-            print("🔍 Parsing HTML content...")
             
             # Find listing containers with multiple selectors
             listing_selectors = [
@@ -293,15 +276,13 @@ class OLXiPhoneScraper:
                     break
             
             if not listings:
-                print("❌ No listings found. The page structure might have changed.")
-                print("🔍 Trying to debug page structure...")
+                print("No listings found. The page structure might have changed.")
                 if self.verbose:
-                    print("📄 Page content preview:")
+                    print("Page content preview:")
                     print(soup.get_text()[:500])
                 return []
             
-            print(f"📋 Found {len(listings)} potential listings containers")
-            print("🔎 Starting to process individual listings...")
+            print(f"Found {len(listings)} potential listings")
             
             valid_listings = []
             skipped_count = 0
@@ -309,9 +290,6 @@ class OLXiPhoneScraper:
             
             for i, listing in enumerate(listings):
                 try:
-                    if self.verbose and i % 5 == 0:  # Progress update every 5 listings
-                        print(f"📊 Processing listing {i+1}/{len(listings)}...")
-                    
                     # Extract title with multiple selectors
                     title_selectors = [
                         {'data-cy': 'listing-ad-title'},
@@ -328,13 +306,9 @@ class OLXiPhoneScraper:
                             break
                     
                     if not title_elem:
-                        if self.verbose and i < 3:  # Only show for first few failures
-                            print(f"⚠️ Listing {i+1}: Could not find title element")
                         continue
                     
                     title = title_elem.get_text(strip=True)
-                    if self.verbose and i < 3:  # Show details for first few listings
-                        print(f"📝 Listing {i+1}: Found title - '{title[:50]}{'...' if len(title) > 50 else ''}'")
                     
                     # Extract price with multiple selectors
                     price_selectors = [
@@ -349,20 +323,13 @@ class OLXiPhoneScraper:
                             break
                     
                     if not price_elem:
-                        if self.verbose and i < 3:
-                            print(f"⚠️ Listing {i+1}: Could not find price element")
                         continue
                     
                     price_text = price_elem.get_text(strip=True)
                     price = self.extract_price(price_text)
                     
                     if price is None:
-                        if self.verbose and i < 3:
-                            print(f"⚠️ Listing {i+1}: Could not parse price from '{price_text}'")
                         continue
-                    
-                    if self.verbose and i < 3:
-                        print(f"💰 Listing {i+1}: Found price - {price} zł")
                     
                     # Extract link
                     link_elem = listing.find('a', href=True)
@@ -375,41 +342,29 @@ class OLXiPhoneScraper:
                     
                     # Skip if already seen
                     if link in self.seen_listings:
-                        if self.verbose and i < 3:
-                            print(f"🔄 Listing {i+1}: Already seen this listing, skipping")
                         continue
                     
                     # Identify phone model
                     phone_model = self.identify_phone_model(title)
                     if not phone_model:
-                        if self.verbose and i < 3:
-                            print(f"❓ Listing {i+1}: Could not identify iPhone model from title")
                         continue
-                    
-                    if self.verbose and i < 3:
-                        print(f"📱 Listing {i+1}: Identified as {phone_model}")
                     
                     # Check price limit
                     if phone_model in self.price_limits:
                         max_price = self.price_limits[phone_model]
                         if price > max_price:
                             if self.verbose:
-                                print(f"💸 SKIPPED: {phone_model} at {price} zł > {max_price} zł limit")
+                                print(f"SKIPPED: {phone_model} at {price} zł > {max_price} zł limit")
                             
                             skipped_models[phone_model] = skipped_models.get(phone_model, 0) + 1
                             skipped_count += 1
                             continue
-                        else:
-                            if self.verbose and i < 3:
-                                print(f"✅ Price check passed: {price} zł ≤ {max_price} zł limit")
                     else:
                         if self.verbose:
-                            print(f"⚠️ WARNING: No price limit defined for {phone_model}")
+                            print(f"WARNING: No price limit defined for {phone_model}")
                         continue
                     
                     # Extract description (optional, can be slow)
-                    if self.verbose and i < 3:
-                        print(f"📝 Fetching detailed description for listing {i+1}...")
                     description = self.extract_description(link)
                     
                     listing_data = {
