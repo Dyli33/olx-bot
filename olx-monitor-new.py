@@ -20,7 +20,7 @@ class OLXiPhoneScraper:
             'query': 'iphone',
             'distance': 30,  # km radius
             'order': 'created_at:desc',  # newest first
-            'condition': ['used', 'damaged'],  # used and damaged items
+            'condition': ['used', 'damaged', 'new'],  # used, new and damaged items
             'phone_models': [
                 'iphone-11',
                 'iphone-11-pro', 
@@ -97,10 +97,8 @@ class OLXiPhoneScraper:
         self.proxies = []  # List of available proxies
         self.current_proxy = None  # Currently used proxy
         self.proxy_fails = 0  # Counter for consecutive proxy failures
-        self.max_proxy_fails = 3  # Reduced for faster failover
+        self.max_proxy_fails = 5  # Max allowed failures before rotating proxy
         self.use_proxy = True  # Enable or disable proxy usage
-        self.proxy_initialized = False  # Track if proxies have been initialized
-        self.ec2_mode = self.detect_ec2_environment()  # Detect if running on EC2
 
     def build_search_url(self):
         """Build the search URL dynamically based on filters"""
@@ -121,19 +119,9 @@ class OLXiPhoneScraper:
         if self.search_filters.get('order'):
             params['search[order]'] = self.search_filters['order']
         
-        # Condition filter (used/new/damaged)
+        # Condition filter (used/new)
         if self.search_filters.get('condition'):
-            condition = self.search_filters['condition']
-            if isinstance(condition, list):
-                # Handle multiple conditions
-                for i, cond in enumerate(condition):
-                    if cond == 'damaged':
-                        params[f'search[filter_enum_state][{i}]'] = 'broken'  # OLX uses 'broken' for damaged items
-                    else:
-                        params[f'search[filter_enum_state][{i}]'] = cond
-            else:
-                # Handle single condition
-                params['search[filter_enum_state][0]'] = condition
+            params['search[filter_enum_state][0]'] = self.search_filters['condition']
         
         # Phone model filters
         if self.search_filters.get('phone_models'):
@@ -268,8 +256,7 @@ class OLXiPhoneScraper:
         search_url = self.build_search_url()
         
         try:
-            # Use the new make_request method instead of direct requests.get
-            response = self.make_request(search_url, timeout=15)
+            response = requests.get(search_url, headers=self.headers, timeout=15)
             response.raise_for_status()
             
             soup = BeautifulSoup(response.content, 'html.parser')
@@ -661,16 +648,10 @@ class OLXiPhoneScraper:
         verified_proxies = []
         test_url = 'https://www.olx.pl/'
 
-        print(f"🔍 Verifying {len(proxy_list)} proxies...")
-        
-        # Adjust timeout based on environment
-        timeout = 3 if self.ec2_mode else 5
-        max_verified = 2 if self.ec2_mode else 3
+        print(f"Verifying {len(proxy_list)} proxies...")
 
-        for i, proxy in enumerate(proxy_list):
+        for proxy in proxy_list:
             try:
-                print(f"  → Testing proxy {i+1}/{len(proxy_list)}: {proxy}")
-                
                 # Prepare proxy format for requests
                 proxy_dict = {
                     'http': proxy,
@@ -686,22 +667,20 @@ class OLXiPhoneScraper:
                     test_url, 
                     headers=test_headers, 
                     proxies=proxy_dict,
-                    timeout=timeout
+                    timeout=5
                 )
 
-                if response.status_code == 200 and 'olx.pl' in response.text.lower():
+                if response.status_code == 200 and 'olx.pl' in response.text:
                     verified_proxies.append(proxy)
-                    print(f"  ✅ Verified working proxy: {proxy}")
+                    if self.verbose:
+                        print(f"✅ Verified working proxy: {proxy}")
 
                     # If we have enough verified proxies, stop
-                    if len(verified_proxies) >= max_verified:
+                    if len(verified_proxies) >= 3:
                         break
-                else:
-                    print(f"  ❌ Proxy returned {response.status_code} or invalid content")
-                    
-            except Exception as e:
-                print(f"  ❌ Proxy failed: {proxy} - {str(e)[:50]}...")
-                continue
+            except:
+                # Skip this proxy if it fails
+                pass
 
         if verified_proxies:
             print(f"✅ Verified {len(verified_proxies)} working Polish proxies")
@@ -738,19 +717,13 @@ class OLXiPhoneScraper:
         headers = self.headers.copy()
         headers['User-Agent'] = random.choice(self.user_agents)
 
-        # Initialize proxies if not done yet
-        if not self.proxy_initialized and self.use_proxy:
-            self.initialize_proxies()
-
         if not self.use_proxy:
-            if self.verbose:
-                print("Making direct request (no proxy)")
             return requests.get(url, headers=headers, timeout=timeout)
 
         # Try with proxy
         try:
             proxy_dict = self.get_proxy_dict()
-            if proxy_dict and self.verbose:
+            if self.verbose:
                 print(f"Making request with proxy: {self.current_proxy}")
 
             response = requests.get(
@@ -762,157 +735,50 @@ class OLXiPhoneScraper:
 
             # Check if we're getting a valid response
             if response.status_code == 200:
-                if self.verbose:
-                    print(f"✅ Proxy request successful: {response.status_code}")
                 return response
 
             # If we get a bad response, increment fail counter
             self.proxy_fails += 1
-            if self.verbose:
-                print(f"⚠️ Proxy returned {response.status_code}, fail count: {self.proxy_fails}")
 
         except Exception as e:
             if self.verbose:
-                print(f"❌ Proxy request failed: {e}")
+                print(f"Proxy request failed: {e}")
             self.proxy_fails += 1
 
         # If proxy failed too many times, rotate or disable
         if self.proxy_fails >= self.max_proxy_fails:
             if len(self.proxies) > 1:
                 # Try another proxy
-                print(f"🔄 Proxy failed {self.proxy_fails} times, rotating...")
                 self.rotate_proxy()
-                # Try once more with new proxy
-                try:
-                    proxy_dict = self.get_proxy_dict()
-                    return requests.get(url, headers=headers, proxies=proxy_dict, timeout=timeout)
-                except Exception as e:
-                    if self.verbose:
-                        print(f"❌ New proxy also failed: {e}")
             else:
                 # If we're out of proxies, try to get new ones or continue without
-                print("🔄 Trying to refresh proxy list...")
                 new_proxies = self.get_polish_proxies()
                 if new_proxies:
                     self.proxies = new_proxies
                     self.current_proxy = random.choice(self.proxies)
                     self.proxy_fails = 0
-                    print("✅ Got new proxies, retrying...")
-                    try:
-                        proxy_dict = self.get_proxy_dict()
-                        return requests.get(url, headers=headers, proxies=proxy_dict, timeout=timeout)
-                    except:
-                        pass
-                
-                print("⚠️ All proxies failed. Falling back to direct connection.")
-                self.use_proxy = False
-
-        # Fallback without proxy
-        if self.verbose:
-            print("🔄 Falling back to direct connection")
-        return requests.get(url, headers=headers, timeout=timeout)
-
-    def detect_ec2_environment(self):
-        """Detect if running on EC2 instance"""
-        try:
-            # Check for EC2 metadata service
-            response = requests.get('http://169.254.169.254/latest/meta-data/instance-id', timeout=2)
-            if response.status_code == 200:
-                print("🔍 Detected EC2 environment")
-                return True
-        except:
-            pass
-        
-        # Check for common EC2 indicators
-        import platform
-        hostname = platform.node()
-        if 'ec2' in hostname.lower() or 'aws' in hostname.lower():
-            print("🔍 Detected AWS/EC2 environment from hostname")
-            return True
-            
-        print("🔍 Local environment detected")
-        return False
-
-    def initialize_proxies(self):
-        """Initialize proxies with proper error handling"""
-        if self.proxy_initialized:
-            return
-            
-        print("🔄 Initializing proxy system...")
-        
-        if self.ec2_mode:
-            print("⚠️ EC2 detected - using more conservative proxy settings")
-            self.max_proxy_fails = 2  # More aggressive failover on EC2
-        
-        try:
-            self.refresh_proxies()
-            self.proxy_initialized = True
-            
-            if not self.proxies:
-                print("⚠️ No proxies available - continuing without proxy")
-                self.use_proxy = False
-            else:
-                print(f"✅ Proxy system initialized with {len(self.proxies)} proxies")
-                
-        except Exception as e:
-            print(f"❌ Failed to initialize proxies: {e}")
-            self.use_proxy = False
-
-    def test_connection(self):
-        """Test basic connectivity to OLX with detailed debugging"""
-        test_url = "https://www.olx.pl/"
-        print(f"🔍 Testing connection to {test_url}")
-        
-        # Test direct connection first
-        try:
-            print("  → Testing direct connection...")
-            response = requests.get(test_url, headers=self.headers, timeout=10)
-            print(f"  ✅ Direct connection: {response.status_code} (Content: {len(response.text)} chars)")
-            
-            if "olx.pl" in response.text.lower():
-                print("  ✅ Page content looks valid")
-                return True
-            else:
-                print("  ⚠️ Page content might be blocked or redirected")
-                if self.verbose:
-                    print(f"  Content preview: {response.text[:200]}...")
-                    
-        except Exception as e:
-            print(f"  ❌ Direct connection failed: {e}")
-            
-        # Test with proxy if available
-        if self.use_proxy and self.current_proxy:
-            try:
-                print(f"  → Testing proxy connection: {self.current_proxy}")
-                proxy_dict = self.get_proxy_dict()
-                response = requests.get(test_url, headers=self.headers, proxies=proxy_dict, timeout=10)
-                print(f"  ✅ Proxy connection: {response.status_code} (Content: {len(response.text)} chars)")
-                
-                if "olx.pl" in response.text.lower():
-                    print("  ✅ Proxy page content looks valid")
-                    return True
                 else:
-                    print("  ⚠️ Proxy page content might be blocked")
-                    
-            except Exception as e:
-                print(f"  ❌ Proxy connection failed: {e}")
-                
-        return False
+                    print("⚠️ All proxies failed and couldn't find new ones. Continuing without proxy.")
+                    self.use_proxy = False
+
+        # Fallback without proxy if needed
+        if not self.use_proxy or self.proxy_fails >= self.max_proxy_fails:
+            if self.verbose:
+                print("Falling back to direct connection")
+            return requests.get(url, headers=headers, timeout=timeout)
+
+        # If we're here, we need to try another attempt with a different proxy
+        proxy_dict = self.get_proxy_dict()
+        return requests.get(url, headers=headers, proxies=proxy_dict, timeout=timeout)
 
     def run(self):
         """Main method to run the scraper"""
         try:
             print("OLX iPhone Scraper Started")
             print("-" * 40)
-            
-            # Test connection first
-            self.test_connection()
-            
             print(f"Searching for: {', '.join(self.search_filters['phone_models'])}")
             print(f"Max distance: {self.search_filters['distance']} km")
             print(f"Condition: {self.search_filters['condition']}")
-            print(f"Environment: {'EC2' if self.ec2_mode else 'Local'}")
-            print(f"Proxy usage: {'Enabled' if self.use_proxy else 'Disabled'}")
             print("-" * 40)
             
             listings = self.scrape_listings()
