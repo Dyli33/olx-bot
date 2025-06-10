@@ -377,6 +377,9 @@ class OLXiPhoneScraper:
                     # Send notification if new
                     if hasattr(self, 'telegram_enabled') and self.telegram_enabled and link not in self.notified_listings:
                         self.send_telegram_notification(listing_data)
+                        # Log notification sent to logs.txt (simple line)
+                        with open('logs.txt', 'a', encoding='utf-8') as logf:
+                            logf.write(f"[NOTIFICATION SENT] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {listing_data['phone_name']} | {listing_data['price']} zł | {listing_data['link']}\n")
                         self.notified_listings.add(link)
                         self.save_notified_listings()
                     
@@ -501,14 +504,156 @@ class OLXiPhoneScraper:
     def send_telegram_notification(self, listing):
         """Wrapper to run async Telegram sending"""
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            result = loop.run_until_complete(self.send_telegram_message(listing))
-            loop.close()
-            return result
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # If already running, create a new task and wait for it
+                    import threading
+                    result_container = {}
+                    def run_task():
+                        result_container['result'] = loop.run_until_complete(self.send_telegram_message(listing))
+                    t = threading.Thread(target=run_task)
+                    t.start()
+                    t.join()
+                    return result_container['result']
+                else:
+                    return loop.run_until_complete(self.send_telegram_message(listing))
+            except RuntimeError:
+                # No event loop, use asyncio.run
+                return asyncio.run(self.send_telegram_message(listing))
         except Exception as e:
             print(f"Error in Telegram notification wrapper: {e}")
             return False
+
+    def log_newest_offers(self, listings):
+        """Log 5 newest offers to logs.txt"""
+        try:
+            with open('logs.txt', 'a', encoding='utf-8') as f:
+                f.write(f"\nCycle at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                for listing in listings[:5]:
+                    f.write(f"{listing['phone_name']} | {listing['price']} zł | {listing['title']} | {listing['link']}\n")
+                f.write("-" * 50 + "\n")
+        except Exception as e:
+            print(f"Error writing to logs.txt: {e}")
+
+    def get_first10_unfiltered_offers(self):
+        """Scrape the first 10 offers from the OLX page, without any filtering."""
+        search_url = self.build_search_url()
+        try:
+            response = requests.get(search_url, headers=self.headers, timeout=15)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.content, 'html.parser')
+            # Find listing containers with multiple selectors
+            listing_selectors = [
+                {'data-cy': 'l-card'},
+                {'class': re.compile(r'offer-wrapper', re.I)},
+                {'class': re.compile(r'.*listing.*', re.I)}
+            ]
+            listings = []
+            for selector in listing_selectors:
+                found = soup.find_all('div', selector)
+                if found:
+                    listings = found
+                    break
+            offers = []
+            for listing in listings:
+                # Extract title
+                title_elem = listing.find('a') or listing.find('h6') or listing.find('h4') or listing.find('h5')
+                if not title_elem:
+                    continue
+                title = title_elem.get_text(strip=True)
+                # Extract price
+                price_elem = listing.find('p') or listing.find('span')
+                price_text = price_elem.get_text(strip=True) if price_elem else ''
+                # Extract link
+                link_elem = listing.find('a', href=True)
+                if not link_elem:
+                    continue
+                link = link_elem['href']
+                if link.startswith('/'):
+                    link = 'https://www.olx.pl' + link
+                offers.append({
+                    'title': title,
+                    'price': price_text,
+                    'link': link
+                })
+                if len(offers) >= 10:
+                    break
+            return offers
+        except Exception as e:
+            print(f"Error fetching unfiltered offers: {e}")
+            return []
+
+    def log_first10_unfiltered_offers(self, offers):
+        try:
+            with open('logs.txt', 'a', encoding='utf-8') as f:
+                f.write(f"\n[UNFILTERED] Cycle at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                for offer in offers:
+                    f.write(f"{offer['title']} | {offer['price']} | {offer['link']}\n")
+                f.write("-" * 50 + "\n")
+        except Exception as e:
+            print(f"Error writing unfiltered offers to logs.txt: {e}")
+
+    def notify_unfiltered_newest(self):
+        """Check the 10 newest unfiltered offers and send notification if not already sent and matches price/model filter. Debug log for each."""
+        offers = self.get_first10_unfiltered_offers()
+        notified = 0
+        
+        # Debug - check if our target listing is in the unfiltered offers
+        target_url = "https://www.olx.pl/d/oferta/iphone-12-pro-128gb-CID99-ID16bxjh.html"
+        target_found = False
+        for offer in offers:
+            if offer['link'] == target_url:
+                target_found = True
+                print(f"\n[DEBUG TARGET FOUND] {offer['title']} | {offer['price']} | {target_url}")
+                print(f"Phone model detected: {self.identify_phone_model(offer['title'])}")
+                print(f"Price extracted: {self.extract_price(offer['price'])}")
+                print(f"Already notified: {target_url in self.notified_listings}")
+                
+        if not target_found:
+            print(f"\n[DEBUG] Target listing not found in unfiltered offers: {target_url}")
+            
+        for offer in offers:
+            link = offer['link']
+            phone_model = self.identify_phone_model(offer['title'])
+            price = self.extract_price(offer['price'])
+            debug_msg = f"[DEBUG] {offer['title']} | {offer['price']} | {link} => "
+            if link in self.notified_listings:
+                print(debug_msg + "already notified, skipping.")
+            else:
+                # If model is not identified, but price is present and below ANY price limit, send notification
+                eligible = False
+                model_for_limit = phone_model
+                if phone_model and price is not None and phone_model in self.price_limits and price <= self.price_limits[phone_model]:
+                    eligible = True
+                elif price is not None:
+                    # Try to match any price limit if model is not identified
+                    for limit in self.price_limits.values():
+                        if price <= limit:
+                            eligible = True
+                            model_for_limit = None
+                            break
+                if eligible:
+                    # Always set phone_name to something meaningful
+                    phone_name = phone_model if phone_model else offer['title']
+                    listing = {
+                        'phone_name': phone_name,
+                        'price': price,
+                        'description': '',
+                        'link': link,
+                        'title': offer['title']
+                    }
+                    sent = self.send_telegram_notification(listing)
+                    if sent:
+                        print(debug_msg + f"notification sent! (Model: {phone_name})")
+                        self.notified_listings.add(link)
+                        self.save_notified_listings()
+                    else:
+                        print(debug_msg + "notification FAILED!")
+                    notified += 1
+                else:
+                    print(debug_msg + "not eligible for notification (model/price filter)")
+        return notified
 
     def run(self):
         """Main method to run the scraper"""
@@ -520,23 +665,20 @@ class OLXiPhoneScraper:
             print(f"Condition: {self.search_filters['condition']}")
             print("-" * 40)
             
-            listings = self.scrape_listings()
-            
-            if listings:
-                print(f"\n✅ Found {len(listings)} valid listings matching criteria")
-                for listing in listings[:5]:  # Show first 5
-                    print(f"  • {listing['phone_name']} - {listing['price']} zł")
-                if len(listings) > 5:
-                    print(f"  • ... and {len(listings) - 5} more")
+            # Log the 10 actual newest offers from the OLX page (unfiltered)
+            unfiltered_offers = self.get_first10_unfiltered_offers()
+            if unfiltered_offers:
+                self.log_first10_unfiltered_offers(unfiltered_offers)
+                # Notify for unfiltered offers if not already sent and matches filter
+                self.notify_unfiltered_newest()
             else:
-                print("❌ No valid listings found matching price criteria")
+                print("❌ No unfiltered offers found")
             
         except Exception as e:
             print(f"ERROR in run method: {e}")
             if self.verbose:
                 import traceback
                 print(f"Traceback: {traceback.format_exc()}")
-
 
 if __name__ == "__main__":
     try:
