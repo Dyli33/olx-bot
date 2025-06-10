@@ -789,18 +789,11 @@ class OLXiPhoneScraper:
             if link in self.notified_listings:
                 print(debug_msg + "already notified, skipping.")
             else:
-                # If model is not identified, but price is present and below ANY price limit, send notification
+                # Only send notification if model is identified and price is within limit
                 eligible = False
                 model_for_limit = phone_model
                 if phone_model and price is not None and phone_model in self.price_limits and price <= self.price_limits[phone_model]:
                     eligible = True
-                elif price is not None:
-                    # Try to match any price limit if model is not identified
-                    for limit in self.price_limits.values():
-                        if price <= limit:
-                            eligible = True
-                            model_for_limit = None
-                            break
                 if eligible:
                     # Always set phone_name to something meaningful
                     phone_name = phone_model if phone_model else offer['title']
