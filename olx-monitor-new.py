@@ -155,7 +155,30 @@ class OLXiPhoneScraper:
 
     def identify_phone_model(self, title):
         """Identify iPhone model from title - improved pattern matching"""
+        # Guard against empty titles
+        if not title or len(title.strip()) < 3:
+            if self.verbose:
+                print(f"Title is empty or too short: '{title}'")
+            return None
+            
         title_lower = title.lower()
+        
+        # Extract model from URL if title doesn't work
+        url_model_match = re.search(r'iphone[-_]?(\d+)[-_]?(pro)?[-_]?(max|plus)?', title_lower)
+        if url_model_match:
+            number = url_model_match.group(1)
+            pro = url_model_match.group(2)
+            size_variant = url_model_match.group(3)
+            
+            model = f"iPhone {number}"
+            if pro:
+                model += " Pro"
+            if size_variant:
+                model += " Max" if size_variant == "max" else " Plus"
+                
+            if self.verbose:
+                print(f"URL pattern matched '{title}' to {model}")
+            return model
         
         # Define models in order of specificity (most specific first)
         model_patterns = [
@@ -540,45 +563,148 @@ class OLXiPhoneScraper:
         """Scrape the first 10 offers from the OLX page, without any filtering."""
         search_url = self.build_search_url()
         try:
+            # Rotate user agents to prevent blocking
+            self.headers['User-Agent'] = random.choice(self.user_agents)
+            print(f"[DEBUG] Fetching search URL: {search_url}")
             response = requests.get(search_url, headers=self.headers, timeout=15)
             response.raise_for_status()
+            
+            # Save HTML for debugging
+            with open('last_response.html', 'w', encoding='utf-8') as f:
+                f.write(response.text)
+                
+            print(f"[DEBUG] Got response status: {response.status_code}")
+            
             soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Try to find any links to listings directly
+            all_links = soup.find_all('a', href=re.compile(r'/d/oferta/'))
+            if all_links:
+                print(f"[DEBUG] Found {len(all_links)} direct offer links")
+                
             # Find listing containers with multiple selectors
             listing_selectors = [
                 {'data-cy': 'l-card'},
+                {'data-testid': 'listing-grid'},
+                {'class': re.compile(r'css-.*')},
                 {'class': re.compile(r'offer-wrapper', re.I)},
                 {'class': re.compile(r'.*listing.*', re.I)}
             ]
+            
             listings = []
             for selector in listing_selectors:
                 found = soup.find_all('div', selector)
                 if found:
+                    print(f"[DEBUG] Found {len(found)} listings with selector {selector}")
                     listings = found
                     break
+                    
+            if not listings:
+                print("[DEBUG] No listings found with standard selectors. Trying direct link approach...")
+                # If no listings found with standard selectors, try to construct them from links
+                if all_links:
+                    # Find common parent elements that might be listing containers
+                    for link in all_links[:15]:
+                        # Try to find parent div that might be a listing container
+                        parent = link
+                        for _ in range(3):  # Look up to 3 levels up in the DOM
+                            if parent and parent.name == 'div':
+                                listings.append(parent)
+                                break
+                            parent = parent.parent if parent else None
+            
+            print(f"[DEBUG] Processing {len(listings)} potential listings")
             offers = []
+            processed = 0
+            
             for listing in listings:
-                # Extract title
-                title_elem = listing.find('a') or listing.find('h6') or listing.find('h4') or listing.find('h5')
-                if not title_elem:
+                processed += 1
+                try:
+                    # Extract title with multiple approaches
+                    title_elem = None
+                    
+                    # Try to find title in various elements
+                    title_selectors = [
+                        {'data-cy': 'listing-ad-title'},
+                        {'data-testid': 'ad-title'},
+                        {'class': re.compile(r'title', re.I)}
+                    ]
+                    
+                    for selector in title_selectors:
+                        elements = listing.find_all(['h6', 'h5', 'h4', 'h3', 'a'], selector)
+                        if elements:
+                            title_elem = elements[0]
+                            break
+                    
+                    if not title_elem:
+                        # Fall back to any heading or anchor
+                        title_elem = listing.find(['h6', 'h5', 'h4', 'h3']) or listing.find('a')
+                        
+                    if not title_elem:
+                        print(f"[DEBUG] Listing #{processed}: No title element found")
+                        continue
+                        
+                    title = title_elem.get_text(strip=True)
+                    
+                    # Extract price with multiple approaches
+                    price_elem = None
+                    price_selectors = [
+                        {'data-testid': 'ad-price'},
+                        {'data-cy': 'ad-price'},
+                        {'class': re.compile(r'price', re.I)}
+                    ]
+                    
+                    for selector in price_selectors:
+                        elements = listing.find_all(['p', 'span', 'div'], selector)
+                        if elements:
+                            price_elem = elements[0]
+                            break
+                    
+                    if not price_elem:
+                        # Fall back to any element with price-like text
+                        for elem in listing.find_all(['p', 'span', 'div']):
+                            text = elem.get_text(strip=True)
+                            if 'zł' in text or 'PLN' in text:
+                                price_elem = elem
+                                break
+                                
+                    price_text = price_elem.get_text(strip=True) if price_elem else ''
+                    
+                    # Extract link - most important part
+                    link = None
+                    
+                    # Find all links in this listing
+                    link_elems = listing.find_all('a', href=True)
+                    for link_elem in link_elems:
+                        href = link_elem['href']
+                        # Check for OLX listing pattern
+                        if 'oferta' in href:
+                            link = href
+                            break
+                            
+                    if not link:
+                        print(f"[DEBUG] Listing #{processed}: No link found")
+                        continue
+                        
+                    if link.startswith('/'):
+                        link = 'https://www.olx.pl' + link
+                        
+                    print(f"[DEBUG] Found listing: '{title[:30]}...' | {price_text} | {link}")
+                    
+                    offers.append({
+                        'title': title,
+                        'price': price_text,
+                        'link': link
+                    })
+                    
+                    if len(offers) >= 10:
+                        break
+                        
+                except Exception as e:
+                    print(f"[DEBUG] Error processing listing #{processed}: {e}")
                     continue
-                title = title_elem.get_text(strip=True)
-                # Extract price
-                price_elem = listing.find('p') or listing.find('span')
-                price_text = price_elem.get_text(strip=True) if price_elem else ''
-                # Extract link
-                link_elem = listing.find('a', href=True)
-                if not link_elem:
-                    continue
-                link = link_elem['href']
-                if link.startswith('/'):
-                    link = 'https://www.olx.pl' + link
-                offers.append({
-                    'title': title,
-                    'price': price_text,
-                    'link': link
-                })
-                if len(offers) >= 10:
-                    break
+                    
+            print(f"[DEBUG] Found {len(offers)} valid offers out of {len(listings)} listings")
             return offers
         except Exception as e:
             print(f"Error fetching unfiltered offers: {e}")
@@ -600,8 +726,12 @@ class OLXiPhoneScraper:
         notified = 0
         
         # Debug - check if our target listing is in the unfiltered offers
-        target_url = "https://www.olx.pl/d/oferta/iphone-12-pro-128gb-CID99-ID16bxjh.html"
+        target_url = "https://www.olx.pl/d/oferta/iphone-14-pro-128gb-black-CID99-ID15UzJN.html"
         target_found = False
+        
+        print("\n[DEBUG] Current notified_listings.txt entries count:", len(self.notified_listings))
+        print("[DEBUG] Target URL in notified_listings?", target_url in self.notified_listings)
+        
         for offer in offers:
             if offer['link'] == target_url:
                 target_found = True
@@ -655,6 +785,69 @@ class OLXiPhoneScraper:
                     print(debug_msg + "not eligible for notification (model/price filter)")
         return notified
 
+    def check_direct_listing(self, url):
+        """Directly check a specific listing URL to see if it exists and extract details"""
+        print(f"\n[DEBUG] Checking direct listing URL: {url}")
+        try:
+            # Rotate user agents to prevent blocking
+            self.headers['User-Agent'] = random.choice(self.user_agents)
+            response = requests.get(url, headers=self.headers, timeout=15)
+            
+            if response.status_code != 200:
+                print(f"[DEBUG] Listing URL returned status code: {response.status_code}")
+                return None
+                
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Try to extract title
+            title_selectors = [
+                {'data-cy': 'ad_title'}, 
+                {'class': 'css-1soizd2'}, 
+                {'class': 'css-1juynto'},
+                {'class': re.compile(r'.*title.*', re.I)}
+            ]
+            title = None
+            for selector in title_selectors:
+                title_elem = soup.find(['h1', 'h2', 'h3'], selector)
+                if title_elem:
+                    title = title_elem.get_text(strip=True)
+                    break
+                    
+            # Try to extract price
+            price_selectors = [
+                {'data-testid': 'ad-price-container'},
+                {'class': re.compile(r'.*price.*', re.I)}
+            ]
+            price_text = None
+            for selector in price_selectors:
+                price_elem = soup.find(['div', 'h3', 'span'], selector)
+                if price_elem:
+                    price_text = price_elem.get_text(strip=True)
+                    break
+                    
+            if not title:
+                print(f"[DEBUG] Could not extract title from listing page")
+                return None
+                
+            print(f"[DEBUG] Direct check results: Title='{title}', Price='{price_text}'")
+            
+            phone_model = self.identify_phone_model(title)
+            price = self.extract_price(price_text) if price_text else None
+            
+            print(f"[DEBUG] Direct check decoded: Model={phone_model}, Price={price}")
+            
+            return {
+                'exists': True,
+                'title': title,
+                'price_text': price_text,
+                'phone_model': phone_model,
+                'price': price
+            }
+            
+        except Exception as e:
+            print(f"[DEBUG] Error checking direct listing: {e}")
+            return None
+    
     def run(self):
         """Main method to run the scraper"""
         try:
@@ -675,6 +868,25 @@ class OLXiPhoneScraper:
             else:
                 print(f"No price limit found for {detected_model}")
             print("-" * 40)
+            
+            # Check the specific listing that's not being found
+            target_url = "https://www.olx.pl/d/oferta/iphone-14-pro-128gb-black-CID99-ID15UzJN.html"
+            direct_check = self.check_direct_listing(target_url)
+            if direct_check:
+                print(f"[DEBUG] Target listing direct check: {direct_check}")
+                # Check if eligible for notification based on price
+                if direct_check['phone_model'] and direct_check['price']:
+                    model = direct_check['phone_model']
+                    if model in self.price_limits and direct_check['price'] <= self.price_limits[model]:
+                        print(f"[DEBUG] Target listing IS eligible for notification!")
+                        if target_url not in self.notified_listings:
+                            print(f"[DEBUG] Target listing has NOT been notified before - should be notified!")
+                        else:
+                            print(f"[DEBUG] Target listing has already been notified before.")
+                    else:
+                        print(f"[DEBUG] Target listing price {direct_check['price']} exceeds limit of {self.price_limits.get(model, 'N/A')}")
+                else:
+                    print(f"[DEBUG] Could not determine model or price for direct listing check")
             
             # Log the 10 actual newest offers from the OLX page (unfiltered)
             unfiltered_offers = self.get_first10_unfiltered_offers()
