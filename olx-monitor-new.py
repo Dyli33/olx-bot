@@ -665,6 +665,17 @@ class OLXiPhoneScraper:
             print(f"Condition: {self.search_filters['condition']}")
             print("-" * 40)
             
+            # Debug - Test iPhone 12 Pro detection with the exact title
+            test_title = "iPhone 12 Pro 128GB"
+            detected_model = self.identify_phone_model(test_title)
+            print(f"\n[DEBUG] Testing model detection with '{test_title}'")
+            print(f"Detected model: {detected_model}")
+            if detected_model in self.price_limits:
+                print(f"Price limit for {detected_model}: {self.price_limits[detected_model]}")
+            else:
+                print(f"No price limit found for {detected_model}")
+            print("-" * 40)
+            
             # Log the 10 actual newest offers from the OLX page (unfiltered)
             unfiltered_offers = self.get_first10_unfiltered_offers()
             if unfiltered_offers:
