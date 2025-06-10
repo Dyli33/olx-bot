@@ -41,24 +41,27 @@ class OLXiPhoneScraper:
             ]
         }
         
+        # Logging and debugging settings
+        self.logging_enabled = False  # Set to True to enable logging to logs.txt
+        
         # Price thresholds in PLN - easily editable
         self.price_limits = {
-            "iPhone 11": 1370,
-            "iPhone 11 Pro": 1470,
-            "iPhone 11 Pro Max": 1570,
-            "iPhone 12": 1520,
-            "iPhone 12 Pro": 1820,
-            "iPhone 12 Pro Max": 1920,
-            "iPhone 13": 1920,
-            "iPhone 13 Pro": 11300,
-            "iPhone 13 Pro Max": 11450,
-            "iPhone 14": 11250,
-            "iPhone 14 Plus": 11350,
-            "iPhone 14 Pro": 11850,
-            "iPhone 14 Pro Max": 12050,
-            "iPhone 15": 11950,
-            "iPhone 15 Pro": 12550,
-            "iPhone 15 Pro Max": 13050
+            "iPhone 11": 370,
+            "iPhone 11 Pro": 470,
+            "iPhone 11 Pro Max": 570,
+            "iPhone 12": 520,
+            "iPhone 12 Pro": 820,
+            "iPhone 12 Pro Max": 920,
+            "iPhone 13": 920,
+            "iPhone 13 Pro": 1300,
+            "iPhone 13 Pro Max": 1450,
+            "iPhone 14": 1250,
+            "iPhone 14 Plus": 1350,
+            "iPhone 14 Pro": 1850,
+            "iPhone 14 Pro Max": 2050,
+            "iPhone 15": 1950,
+            "iPhone 15 Pro": 2550,
+            "iPhone 15 Pro Max": 3050
         }
         
         self.headers = {
@@ -551,13 +554,43 @@ class OLXiPhoneScraper:
     def log_newest_offers(self, listings):
         """Log 5 newest offers to logs.txt"""
         try:
+            # Skip logging if disabled
+            if not self.logging_enabled:
+                return
+                
+            # Trim logs file to keep only the last 2000 lines
+            self.trim_logs_file(max_lines=2000)
+            
             with open('logs.txt', 'a', encoding='utf-8') as f:
-                f.write(f"\nCycle at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                for listing in listings[:5]:
-                    f.write(f"{listing['phone_name']} | {listing['price']} zł | {listing['title']} | {listing['link']}\n")
+                f.write(f"\n[UNFILTERED] Cycle at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                for listing in listings[:10]:
+                    f.write(f" | {listing['price']} zł | {listing['link']}\n")
                 f.write("-" * 50 + "\n")
         except Exception as e:
             print(f"Error writing to logs.txt: {e}")
+            
+    def trim_logs_file(self, max_lines=2000):
+        """Trim logs.txt file to keep only the most recent lines"""
+        try:
+            # Check if file exists
+            if not os.path.exists('logs.txt'):
+                return
+                
+            # Read all lines
+            with open('logs.txt', 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+                
+            # If file is already under the max line limit, no need to trim
+            if len(lines) <= max_lines:
+                return
+                
+            # Keep only the most recent lines
+            with open('logs.txt', 'w', encoding='utf-8') as f:
+                f.writelines(lines[-max_lines:])
+                
+            print(f"Trimmed logs.txt from {len(lines)} to {max_lines} lines")
+        except Exception as e:
+            print(f"Error trimming logs file: {e}")
 
     def get_first10_unfiltered_offers(self):
         """Scrape the first 10 offers from the OLX page, without any filtering."""
@@ -569,9 +602,10 @@ class OLXiPhoneScraper:
             response = requests.get(search_url, headers=self.headers, timeout=15)
             response.raise_for_status()
             
-            # Save HTML for debugging
-            with open('last_response.html', 'w', encoding='utf-8') as f:
-                f.write(response.text)
+            # HTML debugging disabled
+            # Uncomment if needed for debugging
+            # with open('last_response.html', 'w', encoding='utf-8') as f:
+            #     f.write(response.text)
                 
             print(f"[DEBUG] Got response status: {response.status_code}")
             
@@ -712,6 +746,10 @@ class OLXiPhoneScraper:
 
     def log_first10_unfiltered_offers(self, offers):
         try:
+            # Skip logging if disabled
+            if not self.logging_enabled:
+                return
+                
             with open('logs.txt', 'a', encoding='utf-8') as f:
                 f.write(f"\n[UNFILTERED] Cycle at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                 for offer in offers:
