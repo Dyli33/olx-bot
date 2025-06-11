@@ -398,7 +398,7 @@ class OLXiPhoneScraper:
                     self.seen_listings.add(link)
                     valid_listings.append(listing_data)
                     
-                    print(f"✓ Found: {phone_model} - {price} zł")
+                    print(f"✓ {phone_model}: {title} - {price} zł")
                     
                     # Send notification if new
                     if hasattr(self, 'telegram_enabled') and self.telegram_enabled and link not in self.notified_listings:
@@ -602,10 +602,11 @@ class OLXiPhoneScraper:
             response = requests.get(search_url, headers=self.headers, timeout=15)
             response.raise_for_status()
             
-            # HTML debugging disabled
-            # Uncomment if needed for debugging
+            # HTML debugging disabled for better performance
+            # Uncomment next 3 lines if debugging is needed
             # with open('last_response.html', 'w', encoding='utf-8') as f:
             #     f.write(response.text)
+            # print(f"[DEBUG] Saved response to last_response.html for inspection")
                 
             print(f"[DEBUG] Got response status: {response.status_code}")
             
@@ -731,7 +732,7 @@ class OLXiPhoneScraper:
                         'link': link
                     })
                     
-                    if len(offers) >= 10:
+                    if len(offers) >= 50:  # Increased from 10 to catch more listings
                         break
                         
                 except Exception as e:
