@@ -383,8 +383,8 @@ class OLXiPhoneScraper:
                             print(f"WARNING: No price limit defined for {phone_model}")
                         continue
                     
-                    # Extract description (optional, can be slow)
-                    description = self.extract_description(link)
+                    # Description fetching removed for speed optimization
+                    description = "Description fetching disabled for speed"
                     
                     listing_data = {
                         'phone_name': phone_model,
@@ -950,7 +950,7 @@ if __name__ == "__main__":
                 
                 scraper.run()
                 
-                wait_time = random.uniform(3, 5)  # Random wait between 3-5 seconds
+                wait_time = random.uniform(2, 4)  # Random wait between 3-5 seconds
                 print(f"\nCycle #{cycle} completed. Waiting {wait_time:.1f} seconds...")
                 print("=" * 50)
 
