@@ -951,7 +951,7 @@ if __name__ == "__main__":
                 
                 scraper.run()
                 
-                wait_time = random.uniform(4, 8)  # Random wait between 3-5 seconds
+                wait_time = random.uniform(20, 30)  # Random wait between 20-30 seconds
                 print(f"\nCycle #{cycle} completed. Waiting {wait_time:.1f} seconds...")
                 print("=" * 50)
 
