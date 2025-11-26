@@ -46,22 +46,22 @@ class OLXiPhoneScraper:
         
         # Price thresholds in PLN - easily editable
         self.price_limits = {
-            "iPhone 11": 370,
-            "iPhone 11 Pro": 470,
-            "iPhone 11 Pro Max": 570,
-            "iPhone 12": 520,
-            "iPhone 12 Pro": 820,
-            "iPhone 12 Pro Max": 920,
-            "iPhone 13": 920,
-            "iPhone 13 Pro": 1300,
-            "iPhone 13 Pro Max": 1450,
-            "iPhone 14": 1250,
-            "iPhone 14 Plus": 1350,
-            "iPhone 14 Pro": 1850,
-            "iPhone 14 Pro Max": 2050,
-            "iPhone 15": 1950,
-            "iPhone 15 Pro": 2550,
-            "iPhone 15 Pro Max": 3050
+            "iPhone 11": 250,
+            "iPhone 11 Pro": 450,
+            "iPhone 11 Pro Max": 450,
+            "iPhone 12": 400,
+            "iPhone 12 Pro": 600,
+            "iPhone 12 Pro Max": 800,
+            "iPhone 13": 600,
+            "iPhone 13 Pro": 1100,
+            "iPhone 13 Pro Max": 1300,
+            "iPhone 14": 1000,
+            "iPhone 14 Plus": 1100,
+            "iPhone 14 Pro": 1400,
+            "iPhone 14 Pro Max": 2100,
+            "iPhone 15": 1600,
+            "iPhone 15 Pro": 2100,
+            "iPhone 15 Pro Max": 2400
         }
         
         self.headers = {
